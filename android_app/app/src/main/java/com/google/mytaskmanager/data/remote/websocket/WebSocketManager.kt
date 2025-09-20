@@ -157,5 +157,5 @@ class WebSocketManager(private val client: OkHttpClient) {
         }
     }
 
-    private fun defaultWsUrl(): String = "ws://10.0.2.2:8080/ws"
+    private fun defaultWsUrl(): String = "ws://10.0.2.2:8080"
 }
