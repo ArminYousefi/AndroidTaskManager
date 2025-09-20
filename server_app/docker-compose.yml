@@ -1,0 +1,28 @@
+
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: mytaskdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  app:
+    build: .
+    depends_on:
+      - db
+    environment:
+      JDBC_DATABASE_URL: jdbc:postgresql://db:5432/mytaskdb
+      DB_USER: postgres
+      DB_PASS: postgres
+      JWT_SECRET: "change_me_replace_with_secure_value"
+      ACCESS_TOKEN_MS: 900000
+      REFRESH_TOKEN_MS: 2592000000
+    ports:
+      - "8080:8080"
+volumes:
+  pgdata:

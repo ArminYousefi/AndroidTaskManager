@@ -1,0 +1,66 @@
+package com.google.mytaskmanager.data.local.auth
+
+import android.content.Context
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.Flow
+import java.io.IOException
+
+private val Context.dataStore by preferencesDataStore(name = "auth_prefs")
+
+object AuthPrefsKeys {
+    val TOKEN = stringPreferencesKey("auth_token")
+    val REFRESH = stringPreferencesKey("refresh_token")
+    val USERNAME = stringPreferencesKey("username")
+}
+
+class AuthPreferences(private val context: Context) {
+
+    val authTokenFlow: Flow<String?> = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }.map { prefs -> prefs[AuthPrefsKeys.TOKEN] }
+
+    val refreshTokenFlow: Flow<String?> = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }.map { prefs -> prefs[AuthPrefsKeys.REFRESH] }
+
+    suspend fun saveToken(token: String) {
+        context.dataStore.edit { prefs ->
+            prefs[AuthPrefsKeys.TOKEN] = token
+        }
+    }
+
+    suspend fun saveRefreshToken(refresh: String) {
+        context.dataStore.edit { prefs ->
+            prefs[AuthPrefsKeys.REFRESH] = refresh
+        }
+    }
+
+    suspend fun removeRefreshToken() {
+        context.dataStore.edit { prefs -> prefs.remove(AuthPrefsKeys.REFRESH) }
+    }
+
+    suspend fun clearToken() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(AuthPrefsKeys.TOKEN)
+        }
+    }
+
+    suspend fun saveUsername(username: String) {
+        context.dataStore.edit { prefs ->
+            prefs[AuthPrefsKeys.USERNAME] = username
+        }
+    }
+
+    val usernameFlow: Flow<String?> = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }.map { prefs -> prefs[AuthPrefsKeys.USERNAME] }
+}

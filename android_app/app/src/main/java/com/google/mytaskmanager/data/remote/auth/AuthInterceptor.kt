@@ -1,0 +1,26 @@
+
+package com.google.mytaskmanager.data.remote.auth
+
+import com.google.mytaskmanager.data.local.auth.AuthPreferences
+import com.google.mytaskmanager.util.LogUtil
+import okhttp3.Interceptor
+import okhttp3.Response
+
+class AuthInterceptor(private val authPrefs: AuthPreferences) : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        // Prefer in-memory token cache to avoid blocking.
+        val token = TokenProvider.token
+            com.google.mytaskmanager.util.LogUtil.i("AuthInterceptor", "intercept -> token present? ${!token.isNullOrBlank()} (partial: ${token?.take(10)}...)")
+        // As a fallback, try to read from preferences (non-blocking here is not possible in interceptor).
+        if (token.isNullOrBlank()) {
+            LogUtil.w("AuthInterceptor", "No in-memory token available; requests may be unauthenticated")
+        }
+        val request = if (!token.isNullOrBlank()) {
+            chain.request().newBuilder()
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+        } else chain.request()
+        return chain.proceed(request)
+    }
+}
+
