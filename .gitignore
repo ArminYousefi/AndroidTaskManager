@@ -1,0 +1,14 @@
+# Build output / IDE / local machine files
+build/
+.gradle/
+.idea/
+*.iml
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.bak
+.DS_Store
+*.log
+# secrets
+.env

@@ -2,6 +2,7 @@ package com.google.mytaskmanager.di
 
 import android.content.Context
 import com.google.mytaskmanager.data.local.auth.AuthPreferences
+import com.google.mytaskmanager.data.remote.NetworkConfig
 import com.google.mytaskmanager.data.remote.api.ApiService
 import com.google.mytaskmanager.data.remote.auth.AuthInterceptor
 import com.google.mytaskmanager.data.remote.auth.AuthAuthenticator
@@ -61,7 +62,7 @@ object NetworkModule {
     @Singleton
     fun provideRetrofit(moshi: Moshi, client: OkHttpClient): Retrofit =
         Retrofit.Builder()
-            .baseUrl("http://10.0.2.2:8080/")
+            .baseUrl(NetworkConfig.HTTP_BASE_URL)
             .addConverterFactory(MoshiConverterFactory.create(moshi))
             .client(client)
             .build()

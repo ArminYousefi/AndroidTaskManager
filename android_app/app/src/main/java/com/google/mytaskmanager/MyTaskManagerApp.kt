@@ -3,60 +3,61 @@ package com.google.mytaskmanager
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import com.google.mytaskmanager.data.conflict.ConflictManager
+import com.google.mytaskmanager.core.CrashHandler
+import com.google.mytaskmanager.core.ErrorReporter
 import com.google.mytaskmanager.data.local.auth.AuthPreferences
 import com.google.mytaskmanager.data.remote.auth.TokenProvider
 import com.google.mytaskmanager.data.sync.SyncWorker
-import com.google.mytaskmanager.util.LogUtil
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
+/**
+ * Process start-up: crash handler, session restore, background sync scheduling.
+ * Implements [Configuration.Provider] so WorkManager can create `@HiltWorker` classes (the default initializer is
+ * removed in the manifest).
+ */
 @HiltAndroidApp
 class MyTaskManagerApp : Application(), Configuration.Provider {
+    @Inject lateinit var workerFactory: HiltWorkerFactory
+    @Inject lateinit var errorReporter: ErrorReporter
+    @Inject lateinit var authPrefs: AuthPreferences
 
-    @Inject
-    lateinit var workerFactory: HiltWorkerFactory
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    @Volatile private var userId: String? = null
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
     override fun onCreate() {
-        super.onCreate()
+        super.onCreate() // Hilt injects the fields above here
 
-        // --- Hydrate token early ---
-        val prefs = AuthPreferences(this)
-        runBlocking(Dispatchers.IO) {
-            try {
-                val token = prefs.authTokenFlow.firstOrNull()
-                if (!token.isNullOrBlank()) {
-                    TokenProvider.setToken(token)
-                    LogUtil.i("MyTaskManagerApp", "Rehydrated token on startup: ${token.take(10)}...")
-                } else {
-                    LogUtil.i("MyTaskManagerApp", "No persisted token found on startup")
-                }
-            } catch (t: Throwable) {
-                LogUtil.e("MyTaskManagerApp", "Token rehydration failed", t)
-            }
-        }
+        // 1) Crash capture first, so even start-up crashes are recorded.
+        CrashHandler.install(this, screenProvider = { errorReporter.currentScreen }, userIdProvider = { userId })
 
-        // --- Init your conflict manager ---
-        ConflictManager.init(this)
+        // 2) Restore the session token synchronously: the first API call may happen immediately.
+        runBlocking { authPrefs.authTokenFlow.first()?.let { TokenProvider.setToken(it) } }
+        appScope.launch { authPrefs.userIdFlow.collect { userId = it } }
 
-        // --- Schedule periodic sync every 15 minutes ---
-        val workRequest = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).build()
+        // 3) Upload a crash from the previous run, and send queued offline changes every 15 minutes when online.
+        appScope.launch { errorReporter.ingestPreviousCrash() }
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "sync_pending_changes",
+            "pending_sync",
             ExistingPeriodicWorkPolicy.KEEP,
-            workRequest
+            PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .build()
         )
     }
-
-    override fun getWorkManagerConfiguration(): Configuration =
-        Configuration.Builder()
-            .setWorkerFactory(workerFactory)
-            .build()
 }

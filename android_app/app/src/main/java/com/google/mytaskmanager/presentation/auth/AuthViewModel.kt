@@ -1,70 +1,52 @@
 package com.google.mytaskmanager.presentation.auth
 
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.mytaskmanager.data.auth.AuthRepository
-import com.google.mytaskmanager.data.remote.websocket.WebSocketManager
-import com.google.mytaskmanager.domain.model.User
+import com.google.mytaskmanager.core.UiErrorHandler
+import com.google.mytaskmanager.data.local.settings.SettingsRepository
+import com.google.mytaskmanager.domain.repository.AuthRepository
+import com.google.mytaskmanager.presentation.common.BaseViewModel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/** State of the login / sign-up forms. [error] is shown inline in the form (not as a snackbar). */
+data class AuthUiState(val loading: Boolean = false, val error: String? = null)
+
+/**
+ * Drives login and sign-up. On success the stored session flips `AuthRepository.isLoggedIn`, and the root navigation
+ * moves to the main screen by itself - this ViewModel never navigates.
+ */
 @HiltViewModel
 class AuthViewModel @Inject constructor(
-    private val authRepo: AuthRepository,
-    private val wsManager: WebSocketManager
-) : ViewModel() {
+    private val auth: AuthRepository,
+    private val settings: SettingsRepository,
+    errors: UiErrorHandler
+) : BaseViewModel(errors) {
+    private val _state = MutableStateFlow(AuthUiState())
+    val state: StateFlow<AuthUiState> = _state.asStateFlow()
 
-    private val _authResult = MutableStateFlow<Result<User>?>(null)
-    val authResult: StateFlow<Result<User>?> = _authResult
+    /** Signs in. */
+    fun login(username: String, password: String) = submit("login") { auth.login(username, password) }
 
-    val isLoggedIn: StateFlow<Boolean> =
-        authRepo.isLoggedIn()
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    /** Creates an account and signs in. */
+    fun signup(username: String, password: String, email: String?, nickname: String?) = submit("sign up") { auth.signup(username, password, email, nickname) }
 
-    // Persisted login state from repository (reads saved tokens/preferences)
-    val persistedIsLoggedIn = authRepo.isLoggedIn().stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    /** Hides a stale error when the user edits a field. */
+    fun clearError() { _state.update { it.copy(error = null) } }
 
-    fun login(username: String, password: String) {
-        viewModelScope.launch {
-            val res = authRepo.login(username, password)
-            _authResult.value = res
-            if (res.isSuccess) {
-                // connect websocket after successful login
-                try {
-                    wsManager.setUrl("ws://10.0.2.2:8080/ws")
-                    wsManager.connect()
-                } catch (_: Throwable) { }
-            }
-        }
-    }
+    /** Remembers that the intro was seen so later logouts go straight to login. */
+    fun markOnboardingSeen() { viewModelScope.launch { settings.setOnboardingSeen() } }
 
-    fun signup(username: String, password: String, email: String? = null) {
-        viewModelScope.launch {
-            val res = authRepo.signup(username, password, email)
-            _authResult.value = res
-            if (res.isSuccess) {
-                try {
-                    wsManager.setUrl("ws://10.0.2.2:8080/ws")
-                    wsManager.connect()
-                } catch (_: Throwable) { }
-            }
-        }
-    }
-
-    fun logout() {
-        viewModelScope.launch {
-            try {
-                authRepo.logout()
-            } finally {
-                try { wsManager.disconnect() } catch (_: Throwable) {}
-            }
-            _authResult.value = null
+    private fun submit(what: String, block: suspend () -> Unit) {
+        if (_state.value.loading) return
+        _state.update { AuthUiState(loading = true) }
+        launchSafe(what, showMessage = false, onError = { e -> _state.update { AuthUiState(error = e.userMessage) } }) {
+            block()
+            _state.update { AuthUiState() }
         }
     }
 }

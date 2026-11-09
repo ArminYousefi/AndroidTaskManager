@@ -1,0 +1,14 @@
+<configuration>
+    <!-- One line per log event; %X{call-id} is the request id set by the CallId plugin so a
+         single request can be followed through the logs and matched to the id returned to the client. -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%X{call-id:-no-req}] %logger{20} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    <logger name="Exposed" level="WARN"/>
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

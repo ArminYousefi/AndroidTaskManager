@@ -14,6 +14,7 @@ interface TaskRepository {
     suspend fun deleteTask(taskId: String)
     suspend fun createBoard(board: Board)
     suspend fun updateBoard(board: Board)
+    suspend fun deleteBoard(boardId: String)
     fun getListsForBoard(boardId: String): Flow<List<BoardList>>
     suspend fun createList(list: BoardList)
     suspend fun updateList(list: BoardList)

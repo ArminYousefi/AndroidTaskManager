@@ -27,14 +27,20 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation-jvm:2.3.4")
     implementation("io.ktor:ktor-serialization-kotlinx-json-jvm:2.3.4")
     implementation("io.ktor:ktor-server-websockets-jvm:2.3.4")
+    implementation("io.ktor:ktor-server-status-pages-jvm:2.3.4")
+    implementation("io.ktor:ktor-server-call-id-jvm:2.3.4")
+    implementation("io.ktor:ktor-server-call-logging-jvm:2.3.4")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
-    implementation("org.jetbrains.exposed:exposed-core:0.41.1")
-    implementation("org.jetbrains.exposed:exposed-dao:0.41.1")
-    implementation("org.jetbrains.exposed:exposed-jdbc:0.41.1")
     implementation("com.zaxxer:HikariCP:5.0.1")
     implementation("org.postgresql:postgresql:42.6.0")
     implementation("at.favre.lib:bcrypt:0.9.0")
     implementation("com.auth0:java-jwt:4.4.0")
     implementation("ch.qos.logback:logback-classic:1.4.11")
     testImplementation("io.ktor:ktor-server-tests-jvm:2.3.4")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.10")
+    testImplementation("com.h2database:h2:2.2.224")
+}
+
+tasks.test {
+    useJUnit()
 }

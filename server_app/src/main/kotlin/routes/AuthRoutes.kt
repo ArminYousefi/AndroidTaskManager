@@ -1,120 +1,51 @@
 package routes
 
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.call
+import io.ktor.server.auth.authenticate
+import io.ktor.server.response.respond
 import io.ktor.server.routing.*
-import io.ktor.server.application.*
-import io.ktor.server.request.*
-import io.ktor.server.response.*
-import io.ktor.http.*
-import services.AuthService
-import kotlinx.serialization.Serializable
 import models.*
+import plugins.ApiException
+import plugins.body
+import services.AuthService
 
 /**
- * Auth routes.
+ * Account endpoints.
  *
- * - Adds explicit logging for incoming requests.
- * - Validates required fields and returns clear status codes and messages.
+ * Public: `POST /auth/signup|login|refresh|logout`.
+ * Authenticated: `GET|PATCH /users/me`, `POST /users/me/password`, `GET /users/search?q=`.
  */
-fun Route.authRoutes(authService: AuthService) {
-    println(">>> authRoutes MOUNTED <<<")
-
+fun Route.authRoutes(auth: AuthService) {
     route("/auth") {
         post("/signup") {
-            println(">>> POST /auth/signup received")
-            val req = try {
-                call.receive<SignupRequest>()
-            } catch (t: Throwable) {
-                // couldn't parse JSON body
-                t.printStackTrace()
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    mapOf("error" to "Invalid request body")
-                )
-                return@post
-            }
-
-            // simple validation
-            if (req.username.isBlank() || req.password.isBlank()) {
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    mapOf("error" to "username and password are required")
-                )
-                return@post
-            }
-
-            try {
-                val resp = authService.signup(req.username.trim(), req.password, req.email?.trim())
-                call.respond(HttpStatusCode.Created, resp)
-            } catch (iae: IllegalArgumentException) {
-                // service-level validation error
-                println("signup failed: ${iae.message}")
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to (iae.message ?: "invalid input")))
-            } catch (e: Throwable) {
-                // Duplicate-user or DB unique constraint may surface here — try to detect by message
-                val msg = e.message ?: "internal error"
-                println("signup exception: $msg")
-                // If it's a duplicate user, return 409
-                if (msg.contains("duplicate", ignoreCase = true) || msg.contains("unique", ignoreCase = true)) {
-                    call.respond(HttpStatusCode.Conflict, mapOf("error" to "User already exists"))
-                } else {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "server error", "detail" to msg))
-                }
-            }
+            val r = call.body<SignupRequest>()
+            call.respond(HttpStatusCode.Created, auth.signup(r.username, r.password, r.email, r.nickname))
         }
-
         post("/login") {
-            println(">>> POST /auth/login received")
-            val req = try {
-                call.receive<LoginRequest>()
-            } catch (t: Throwable) {
-                t.printStackTrace()
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid request body"))
-                return@post
-            }
-
-            if (req.username.isBlank() || req.password.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "username and password are required"))
-                return@post
-            }
-
-            try {
-                val resp = authService.login(req.username.trim(), req.password)
-                call.respond(HttpStatusCode.OK, resp)
-            } catch (iae: IllegalArgumentException) {
-                // invalid credentials thrown as IllegalArgumentException in service
-                println("login failed: ${iae.message}")
-                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to (iae.message ?: "Invalid credentials")))
-            } catch (e: Throwable) {
-                e.printStackTrace()
-                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "server error", "detail" to (e.message ?: "")))
-            }
+            val r = call.body<LoginRequest>()
+            call.respond(auth.login(r.username, r.password))
         }
-
         post("/refresh") {
-            println(">>> POST /auth/refresh received")
-            val payload = try {
-                call.receive<Map<String, String>>()
-            } catch (t: Throwable) {
-                t.printStackTrace()
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid request body"))
-                return@post
+            val r = call.body<RefreshRequest>()
+            if (r.refreshToken.isBlank()) throw ApiException.BadRequest("INVALID_BODY", "refreshToken required")
+            call.respond(auth.refresh(r.refreshToken))
+        }
+        post("/logout") {
+            val r = runCatching { call.body<LogoutRequest>() }.getOrDefault(LogoutRequest())
+            auth.logout(r.refreshToken)
+            call.respond(HttpStatusCode.NoContent)
+        }
+    }
+    authenticate("auth-jwt") {
+        route("/users") {
+            get("/me") { call.respond(auth.me(call.userId())) }
+            patch("/me") { call.respond(auth.updateNickname(call.userId(), call.body<UpdateProfileRequest>().nickname)) }
+            post("/me/password") {
+                val r = call.body<ChangePasswordRequest>()
+                call.respond(auth.changePassword(call.userId(), r.currentPassword, r.newPassword))
             }
-            val token = payload["refreshToken"]
-            if (token.isNullOrBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing refreshToken"))
-                return@post
-            }
-            try {
-                val resp = authService.refresh(token)
-                if (resp == null) {
-                    call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Invalid refresh token"))
-                } else {
-                    call.respond(HttpStatusCode.OK, resp)
-                }
-            } catch (e: Throwable) {
-                e.printStackTrace()
-                call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "server error"))
-            }
+            get("/search") { call.respond(auth.search(call.request.queryParameters["q"].orEmpty(), call.userId())) }
         }
     }
 }

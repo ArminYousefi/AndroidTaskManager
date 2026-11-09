@@ -1,105 +1,84 @@
 package com.google.mytaskmanager.data.remote.auth
 
 import com.google.mytaskmanager.data.local.auth.AuthPreferences
+import com.google.mytaskmanager.data.remote.NetworkConfig
 import com.google.mytaskmanager.util.LogUtil
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import okhttp3.Authenticator
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.Route
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.flow.first
-import com.google.gson.Gson
+import org.json.JSONObject
+import java.io.IOException
 
 /**
- * On 401, attempt to refresh token synchronously using refresh token from AuthPreferences.
- * If refresh succeeds, updates TokenProvider and persisted token. If it fails, clears tokens.
+ * Called by OkHttp on HTTP 401: exchanges the refresh token for a new access token and retries the request.
  *
- * Expects backend refresh endpoint at POST /auth/refresh with body {"refreshToken":"..."} returning AuthResponse JSON.
+ * Details that matter:
+ * - Refresh tokens are *rotated* by the server, so refreshes are serialised. If another request already refreshed
+ *   while this one was waiting, the new token is simply reused.
+ * - Calls to the auth endpoints (login, signup, refresh) are never refreshed (a 401 on login means "wrong password", not "expired").
+ * - The session is cleared only when the server *rejects* the refresh token. A network error while refreshing keeps
+ *   the user signed in, so going through a tunnel does not log anybody out.
  */
 class AuthAuthenticator(private val authPrefs: AuthPreferences) : Authenticator {
+    private val lock = Any()
+    private val plainClient = OkHttpClient()
+
     override fun authenticate(route: Route?, response: Response): Request? {
-        // avoid infinite loops
-        if (responseCount(response) >= 2) {
-            return null
-        }
+        if (response.request.url.encodedPath.contains("/auth/")) return null
+        if (responseCount(response) >= 3) return null
+        val sentToken = response.request.header("Authorization")?.removePrefix("Bearer ")
 
-        try {
+        synchronized(lock) {
+            val current = TokenProvider.token
+            if (!current.isNullOrBlank() && current != sentToken) return retryWith(response, current)
+
             val refresh = runBlocking { authPrefs.refreshTokenFlow.first() }
-            if (refresh.isNullOrBlank()) {
-                LogUtil.w("AuthAuthenticator", "No refresh token available")
-                return null
-            }
+            if (refresh.isNullOrBlank()) { clearSession(); return null }
 
-            try {
-                // Perform synchronous HTTP call to refresh endpoint
-                val client = OkHttpClient.Builder().build()
-                val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
-                val bodyJson = Gson().toJson(mapOf("refreshToken" to refresh))
-                val req = Request.Builder()
-                    .url("https://api.example.com/auth/refresh")
-                    .post(bodyJson.toRequestBody(mediaType))
-                    .build()
-
-                val resp = client.newCall(req).execute()
-                if (!resp.isSuccessful) {
-                    LogUtil.w("AuthAuthenticator", "Refresh request failed with code ${resp.code}")
-                    LogUtil.w("AuthAuthenticator", "TokenProvider.clear() suppressed to avoid accidental removal")
-                    // clear persisted tokens
-                    LogUtil.w("AuthAuthenticator", "AuthPreferences.clearToken/removeRefreshToken suppressed to avoid accidental removal")
-                    return null
-                }
-
-                val respBody = resp.body.string()
-                if (respBody.isBlank()) {
-                    LogUtil.w("AuthAuthenticator", "TokenProvider.clear() suppressed to avoid accidental removal")
-                    LogUtil.w("AuthAuthenticator", "AuthPreferences.clearToken/removeRefreshToken suppressed to avoid accidental removal")
-                    return null
-                }
-
-                val gson = Gson()
-                val authResponse = gson.fromJson(respBody, com.google.mytaskmanager.data.remote.dto.AuthResponse::class.java)
-                if (authResponse != null && authResponse.token.isNotBlank()) {
-                    // persist new tokens and update in-memory cache
-                    runBlocking {
-                        authPrefs.saveToken(authResponse.token)
-                        authResponse.refreshToken?.let { authPrefs.saveRefreshToken(it) }
+            return try {
+                val body = JSONObject().put("refreshToken", refresh).toString().toRequestBody("application/json".toMediaType())
+                plainClient.newCall(Request.Builder().url(NetworkConfig.REFRESH_ENDPOINT).post(body).build()).execute().use { resp ->
+                    when {
+                        resp.isSuccessful -> {
+                            val json = JSONObject(resp.body.string())
+                            val newToken = json.getString("token")
+                            runBlocking {
+                                authPrefs.saveToken(newToken)
+                                json.optString("refreshToken").takeIf { it.isNotBlank() }?.let { authPrefs.saveRefreshToken(it) }
+                            }
+                            retryWith(response, newToken)
+                        }
+                        resp.code in 400..499 -> { LogUtil.w("AuthAuthenticator", "Refresh rejected (${resp.code}); signing out"); clearSession(); null }
+                        else -> null // 5xx: server trouble, keep the session and let the caller retry later
                     }
-                    TokenProvider.setToken(authResponse.token)
-                LogUtil.i("AuthAuthenticator", "setToken after refresh -> ${authResponse.token.take(10)}...")
-
-                    // build a new request with updated Authorization header
-                    val newRequest = response.request.newBuilder()
-                        .header("Authorization", "Bearer ${authResponse.token}")
-                        .build()
-                    return newRequest
-                } else {
-                    LogUtil.w("AuthAuthenticator", "TokenProvider.clear() suppressed to avoid accidental removal")
-                    LogUtil.w("AuthAuthenticator", "AuthPreferences.clearToken/removeRefreshToken suppressed to avoid accidental removal")
-                    return null
                 }
+            } catch (e: IOException) {
+                LogUtil.w("AuthAuthenticator", "Refresh failed (offline?): ${e.javaClass.simpleName}")
+                null
             } catch (t: Throwable) {
-                LogUtil.e("AuthAuthenticator", "Refresh call failed", t)
-                LogUtil.w("AuthAuthenticator", "TokenProvider.clear() suppressed to avoid accidental removal")
-                LogUtil.w("AuthAuthenticator", "AuthPreferences.clearToken/removeRefreshToken suppressed to avoid accidental removal")
-                return null
+                LogUtil.e("AuthAuthenticator", "Unexpected refresh failure", t)
+                null
             }
-        } catch (t: Throwable) {
-            LogUtil.e("AuthAuthenticator", "Error during authentication", t)
-            LogUtil.w("AuthAuthenticator", "TokenProvider.clear() suppressed to avoid accidental removal")
-            return null
         }
     }
 
+    private fun retryWith(response: Response, token: String): Request =
+        response.request.newBuilder().header("Authorization", "Bearer $token").build()
+
+    private fun clearSession() {
+        runBlocking { runCatching { authPrefs.clearSession() } }
+    }
+
     private fun responseCount(response: Response): Int {
-        var res: Response? = response
-        var result = 0
-        while (res != null) {
-            result++
-            res = res.priorResponse
-        }
-        return result
+        var r: Response? = response
+        var n = 0
+        while (r != null) { n++; r = r.priorResponse }
+        return n
     }
 }

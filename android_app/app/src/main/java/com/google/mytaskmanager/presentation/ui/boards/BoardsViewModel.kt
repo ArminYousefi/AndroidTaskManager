@@ -27,6 +27,8 @@ class BoardsViewModel @Inject constructor(
     private val _state = MutableStateFlow(BoardsState())
     val state: StateFlow<BoardsState> = _state.asStateFlow()
 
+    private var loadBoardsJob: kotlinx.coroutines.Job? = null
+
     init {
         observeConnection()
         loadBoards()
@@ -41,7 +43,13 @@ class BoardsViewModel @Inject constructor(
     }
 
     private fun loadBoards() {
-        viewModelScope.launch {
+        // Previously this launched a brand-new coroutine collecting
+        // boardDao.getBoardsFlow() (via getBoardsUseCase()) on every single call to
+        // refresh()/loadBoards(), without ever cancelling the previous collector.
+        // Each refresh leaked another long-lived Room Flow subscription for the
+        // lifetime of the ViewModel. Now we cancel the prior collector first.
+        loadBoardsJob?.cancel()
+        loadBoardsJob = viewModelScope.launch {
             getBoardsUseCase()
                 .catch { e -> _state.update { it.copy(isLoading = false, error = e.message) } }
                 .collect { list -> _state.update { it.copy(isLoading = false, boards = list) } }
@@ -89,10 +97,17 @@ class BoardsViewModel @Inject constructor(
 
     fun deleteBoard(id: String) {
         viewModelScope.launch {
+            // Optimistically hide it immediately; the reactive boardDao Flow this
+            // ViewModel is already collecting will also emit once the local row is
+            // actually removed inside repo.deleteBoard(), keeping state in sync.
+            _state.update { it.copy(boards = _state.value.boards.filter { b -> b.id != id }) }
             try {
-                // TODO: repo.deleteBoard(id) once implemented
-            } catch (_: Throwable) {}
-            _state.update { it.copy(boards = _state.value.boards.filter { it.id != id }) }
+                repo.deleteBoard(id)
+            } catch (t: Throwable) {
+                // Board deletion failed entirely (including local DB) — reload from
+                // source of truth instead of leaving stale optimistic UI state.
+                loadBoards()
+            }
         }
     }
 
@@ -105,34 +120,25 @@ class BoardsViewModel @Inject constructor(
     }
 
     fun createBoard(title: String) {
+        if (title.isBlank()) {
+            _state.update { it.copy(error = "Board title can't be empty") }
+            return
+        }
         viewModelScope.launch {
-            val newBoard = Board( // ✅ build Board here
+            val newBoard = Board(
                 id = java.util.UUID.randomUUID().toString(),
-                title = title,
+                title = title.trim(),
                 updatedAt = System.currentTimeMillis()
             )
-            repo.createBoard(newBoard) // save to DB + API
-            _state.update { current ->
-                current.copy(
-                    boards = current.boards + newBoard,
-                    showCreateDialog = false
-                )
-            }
+            repo.createBoard(newBoard) // save to DB + API; boardDao's Flow picks it up automatically
+            _state.update { it.copy(showCreateDialog = false) }
         }
     }
 
     fun updateBoard(board: Board) {
         viewModelScope.launch {
-            repo.updateBoard(board) // ✅ use repo
-            _state.update { current ->
-                current.copy(
-                    boards = current.boards.map {
-                        if (it.id == board.id) board else it
-                    },
-                    showEditDialog = false,
-                    editingBoard = null
-                )
-            }
+            repo.updateBoard(board) // boardDao's Flow picks up the change automatically
+            _state.update { it.copy(showEditDialog = false, editingBoard = null) }
         }
     }
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RELEASE / default: HTTPS only. Cleartext (http://) is refused.
+  Debug builds override this file (see src/debug/res/xml/network_security_config.xml)
+  so a dev server on the LAN can be reached without TLS.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

@@ -1,78 +1,74 @@
 package com.google.mytaskmanager.data.local.auth
 
-
-import com.google.mytaskmanager.data.remote.auth.TokenProvider
-import com.google.mytaskmanager.util.LogUtil
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.map
+import com.google.mytaskmanager.data.remote.auth.TokenProvider
+import com.google.mytaskmanager.domain.model.User
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import java.io.IOException
 
-private val Context.dataStore by preferencesDataStore(name = "auth_prefs")
+private val Context.authStore by preferencesDataStore(name = "auth_prefs")
 
-object AuthPrefsKeys {
-    val TOKEN = stringPreferencesKey("auth_token")
-    val REFRESH = stringPreferencesKey("refresh_token")
-    val USERNAME = stringPreferencesKey("username")
-}
-
+/** Persistent session: tokens plus a cached copy of the signed-in user's profile (so the UI works offline). */
 class AuthPreferences(private val context: Context) {
+    private object Keys {
+        val TOKEN = stringPreferencesKey("auth_token")
+        val REFRESH = stringPreferencesKey("refresh_token")
+        val USER_ID = stringPreferencesKey("user_id")
+        val USERNAME = stringPreferencesKey("username")
+        val NICKNAME = stringPreferencesKey("nickname")
+        val EMAIL = stringPreferencesKey("email")
+    }
 
-    val authTokenFlow: Flow<String?> = context.dataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }.map { prefs -> prefs[AuthPrefsKeys.TOKEN] }
+    private val data: Flow<Preferences> = context.authStore.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }
 
-    val refreshTokenFlow: Flow<String?> = context.dataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }.map { prefs -> prefs[AuthPrefsKeys.REFRESH] }
+    /** Current access token (null = signed out). */
+    val authTokenFlow: Flow<String?> = data.map { it[Keys.TOKEN] }.distinctUntilChanged()
 
+    /** Current refresh token. */
+    val refreshTokenFlow: Flow<String?> = data.map { it[Keys.REFRESH] }
+
+    /** Cached profile of the signed-in user, or null when signed out. */
+    val userFlow: Flow<User?> = data.map { p ->
+        val id = p[Keys.USER_ID]; val name = p[Keys.USERNAME]
+        if (id == null || name == null) null else User(id, name, p[Keys.NICKNAME], p[Keys.EMAIL])
+    }.distinctUntilChanged()
+
+    /** Id of the signed-in user (used to filter "only my issues"). */
+    val userIdFlow: Flow<String?> = data.map { it[Keys.USER_ID] }.distinctUntilChanged()
+
+    /** Stores the access token and publishes it to [TokenProvider]. */
     suspend fun saveToken(token: String) {
-        context.dataStore.edit { prefs ->
-            prefs[AuthPrefsKeys.TOKEN] = token
-        }
-        // hydrate in-memory provider so interceptors/ws have immediate access
+        context.authStore.edit { it[Keys.TOKEN] = token }
         TokenProvider.setToken(token)
-        LogUtil.i(
-            "AuthPreferences",
-            "saveToken -> token saved to DataStore and TokenProvider (partial): ${token.take(10)}..."
-        )
     }
 
-    suspend fun saveRefreshToken(refresh: String) {
-        context.dataStore.edit { prefs ->
-            prefs[AuthPrefsKeys.REFRESH] = refresh
+    /** Stores the refresh token. */
+    suspend fun saveRefreshToken(refresh: String) { context.authStore.edit { it[Keys.REFRESH] = refresh } }
+
+    /** Stores (or updates) the cached profile. */
+    suspend fun saveUser(user: User) {
+        context.authStore.edit {
+            it[Keys.USER_ID] = user.id; it[Keys.USERNAME] = user.username
+            if (user.nickname != null) it[Keys.NICKNAME] = user.nickname else it.remove(Keys.NICKNAME)
+            if (user.email != null) it[Keys.EMAIL] = user.email else it.remove(Keys.EMAIL)
         }
     }
 
-    suspend fun removeRefreshToken() {
-        context.dataStore.edit { prefs -> prefs.remove(AuthPrefsKeys.REFRESH) }
-    }
+    /** @return the stored refresh token (suspends once). */
+    suspend fun refreshToken(): String? = data.map { it[Keys.REFRESH] }.first()
 
-    suspend fun clearToken() {
-        context.dataStore.edit { prefs ->
-            prefs.remove(AuthPrefsKeys.TOKEN)
-        }
-        // clear in-memory token as well
+    /** Signs out locally: forgets tokens and profile. */
+    suspend fun clearSession() {
+        context.authStore.edit { it.clear() }
         TokenProvider.clear()
-        LogUtil.i("AuthPreferences", "clearToken -> token removed from DataStore and TokenProvider")
     }
-
-    suspend fun saveUsername(username: String) {
-        context.dataStore.edit { prefs ->
-            prefs[AuthPrefsKeys.USERNAME] = username
-        }
-    }
-
-    val usernameFlow: Flow<String?> = context.dataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }.map { prefs -> prefs[AuthPrefsKeys.USERNAME] }
 }

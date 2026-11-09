@@ -12,6 +12,7 @@ import com.google.mytaskmanager.presentation.auth.LoginScreen
 import com.google.mytaskmanager.presentation.auth.OnboardingScreen
 import com.google.mytaskmanager.presentation.auth.SignUpScreen
 import com.google.mytaskmanager.presentation.auth.AuthViewModel
+import com.google.mytaskmanager.presentation.ui.board.BoardDetailScreen
 import com.google.mytaskmanager.presentation.ui.boards.BoardsScreen
 
 @Composable
@@ -41,23 +42,38 @@ fun NavGraph() {
         }
         composable("login") {
             LoginScreen(
-                onLoginSuccess = { nav.navigate("boards") { popUpTo("login") } },
+                onLoginSuccess = { nav.navigate("boards") { popUpTo("login") { inclusive = true } } },
                 onSignUpRequested = { nav.navigate("signup") },
                 onBack = { nav.popBackStack() })
         }
         composable("signup") {
             SignUpScreen(
-                onSignUpSuccess = { nav.navigate("boards") { popUpTo("signup") } },
+                onSignUpSuccess = { nav.navigate("boards") { popUpTo("signup") { inclusive = true } } },
                 onSignInRequested = { nav.navigate("login") },
                 onBack = { nav.popBackStack() })
         }
         composable("boards") {
-            BoardsScreen(onLogout = {
-                // perform logout via viewModel and navigate to login
-                authViewModel.logout()
-                nav.navigate("login") { popUpTo("boards") { inclusive = true } }
-            })
+            BoardsScreen(
+                onOpenBoard = { boardId -> nav.navigate("board/$boardId") },
+                onLogout = {
+                    // perform logout via viewModel and navigate to login
+                    authViewModel.logout()
+                    nav.navigate("login") { popUpTo("boards") { inclusive = true } }
+                }
+            )
         }
-        composable("board/{id}") { /* Board details screen */ }
+        composable("board/{id}") { backStackEntry ->
+            val boardId = backStackEntry.arguments?.getString("id")
+            // NavGraph guarantees {id} is present for this route; if it's ever
+            // missing (shouldn't happen), fall back to the boards list instead of
+            // crashing on a null boardId.
+            if (boardId != null) {
+                BoardDetailScreen(boardId = boardId, onBack = { nav.popBackStack() })
+            } else {
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    nav.navigate("boards") { popUpTo("board/{id}") { inclusive = true } }
+                }
+            }
+        }
     }
 }

@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <style name="Theme.MyTaskManager" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- The real theme (Light / Dark / Automatic) is applied in Compose. This only controls the window behind the
+         first frame, so there is no white flash when a dark theme starts. -->
+    <style name="Theme.MyTaskManager" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

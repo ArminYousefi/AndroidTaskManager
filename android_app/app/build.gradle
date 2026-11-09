@@ -6,6 +6,12 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
+// Backend address. Emulator default; for a physical device pass your PC's LAN address, e.g.
+//   ./gradlew assembleDebug -PserverUrl=http://192.168.1.2:8080/      (or put serverUrl=... in ~/.gradle/gradle.properties)
+// Release builds must use https:// (cleartext is only allowed in debug builds, see src/debug/res/xml).
+def serverUrl = (project.findProperty("serverUrl") ?: "http://10.0.2.2:8080/").toString()
+if (!serverUrl.endsWith("/")) serverUrl += "/"
+
 android {
     namespace 'com.google.mytaskmanager'
     compileSdk 36
@@ -13,8 +19,9 @@ android {
     defaultConfig {
         applicationId "com.google.mytaskmanager"
         minSdk 24
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "2.0"
+        buildConfigField "String", "SERVER_URL", "\"${serverUrl}\""
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -29,11 +36,16 @@ android {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = '11'
-    }
     buildFeatures {
         compose true
+        buildConfig true
+    }
+}
+
+// Replaces the android { kotlinOptions {} } block, which is an error in Kotlin 2.2+.
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11
     }
 }
 
@@ -49,6 +61,10 @@ dependencies {
     implementation "androidx.compose.ui:ui:1.9.1"
     implementation "androidx.compose.ui:ui-tooling-preview:1.9.1"
     implementation "androidx.compose.material3:material3:1.3.2"
+    // NavGraph.kt uses NavHost/composable/rememberNavController — this was
+    // missing entirely before (only a non-existent "navigation-compose-jvmstubs"
+    // artifact was referenced in the version catalog, and never even applied here).
+    implementation libs.androidx.navigation.compose
     debugImplementation "androidx.compose.ui:ui-tooling:1.9.1"
     debugImplementation "androidx.compose.ui:ui-test-manifest:1.9.1"
 
@@ -91,6 +107,8 @@ dependencies {
     implementation("com.google.code.gson:gson:2.13.2")
     // Testing
     testImplementation "junit:junit:4.13.2"
+    testImplementation "org.jetbrains.kotlin:kotlin-test-junit:2.2.20"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2"
     androidTestImplementation "androidx.test.ext:junit:1.3.0"
     androidTestImplementation "androidx.test.espresso:espresso-core:3.7.0"
     androidTestImplementation "androidx.compose.ui:ui-test-junit4:1.9.1"

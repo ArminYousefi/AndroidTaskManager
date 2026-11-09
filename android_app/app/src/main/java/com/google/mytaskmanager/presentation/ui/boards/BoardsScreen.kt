@@ -14,6 +14,7 @@ import com.composables.icons.lucide.WifiOff
 import com.composables.icons.lucide.LayoutGrid
 import com.composables.icons.lucide.Rows3
 import com.composables.icons.lucide.Plus
+import com.composables.icons.lucide.RefreshCw
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,6 +42,7 @@ fun BoardsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val coroutineScope = rememberCoroutineScope()
+    var showLogoutConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -59,13 +61,14 @@ fun BoardsScreen(
                     IconButton(onClick = { viewModel.toggleView() }) {
                         Icon(imageVector = if (state.isGridView) Lucide.LayoutGrid else Lucide.Rows3, contentDescription = "Toggle view")
                     }
-                    // Delete all boards
+                    // Was mislabeled "Delete all" but only ever called syncBoards() —
+                    // it never deleted anything. Relabeled to match what it does.
                     IconButton(onClick = {
                         coroutineScope.launch {
-                            viewModel.syncBoards() // reuse to refresh after deletion
+                            viewModel.syncBoards()
                         }
                     }) {
-                        Icon(Lucide.Trash2, contentDescription = "Delete all", tint = Color.Red)
+                        Icon(Lucide.RefreshCw, contentDescription = "Refresh boards")
                     }
                 }
             )
@@ -78,7 +81,14 @@ fun BoardsScreen(
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(selected = true, onClick = {}, icon = { Icon(Lucide.House, contentDescription = null) }, label = { Text("Boards") })
-                NavigationBarItem(selected = false, onClick = {}, icon = { Icon(Lucide.User, contentDescription = null) }, label = { Text("Profile") })
+                // Was a no-op (onClick = {}) with no way to log out anywhere in the
+                // app. Tapping Profile now offers logout.
+                NavigationBarItem(
+                    selected = false,
+                    onClick = { showLogoutConfirm = true },
+                    icon = { Icon(Lucide.User, contentDescription = null) },
+                    label = { Text("Profile") }
+                )
             }
         }
     ) { padding ->
@@ -110,6 +120,22 @@ fun BoardsScreen(
     }
     if (state.showEditDialog) {
         EditBoardDialog(board = state.editingBoard, onUpdate = { viewModel.updateBoard(it) }, onDismiss = { viewModel.dismissEditDialog() })
+    }
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("Log out?") },
+            text = { Text("You'll need to sign in again to access your boards.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLogoutConfirm = false
+                    onLogout()
+                }) { Text("Log out") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirm = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
@@ -158,7 +184,7 @@ fun CreateBoardDialog(onCreate: (String)->Unit, onDismiss: ()->Unit) {
             OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Board Title") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp))
         },
         confirmButton = {
-            TextButton(onClick = { onCreate(title) }) { Text("Create Board") }
+            TextButton(onClick = { onCreate(title) }, enabled = title.isNotBlank()) { Text("Create Board") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }

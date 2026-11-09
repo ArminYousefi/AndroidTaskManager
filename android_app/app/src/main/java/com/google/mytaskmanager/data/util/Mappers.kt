@@ -1,195 +1,53 @@
 package com.google.mytaskmanager.data.util
 
-import com.google.mytaskmanager.data.local.model.BoardEntity
-import com.google.mytaskmanager.data.local.model.ListEntity
-import com.google.mytaskmanager.data.local.model.TaskEntity
-import com.google.mytaskmanager.data.remote.dto.BoardDto
-import com.google.mytaskmanager.data.remote.dto.ListDto
-import com.google.mytaskmanager.data.remote.dto.TaskDto
-import com.google.mytaskmanager.data.remote.dto.UserDto
-import com.google.mytaskmanager.domain.model.Board
-import com.google.mytaskmanager.domain.model.BoardList
-import com.google.mytaskmanager.domain.model.Task
-import com.google.mytaskmanager.domain.model.User
+import com.google.mytaskmanager.data.local.entity.BoardEntity
+import com.google.mytaskmanager.data.local.entity.ListEntity
+import com.google.mytaskmanager.data.local.entity.TaskEntity
+import com.google.mytaskmanager.data.remote.dto.*
+import com.google.mytaskmanager.domain.model.*
+import com.google.mytaskmanager.domain.rules.*
 
-// DTO -> Entity
-fun TaskDto.toEntity(): TaskEntity = TaskEntity(
-    id = id,
-    boardId = boardId,
-    listId = listId,
-    title = title,
-    description = description,
-    position = position,
-    status = status,
-    updatedAt = updatedAt,
-    isDeleted = isDeleted
+/* DTO (wire) <-> entity (Room) <-> domain (UI) conversions. Unknown enum values degrade to safe defaults. */
+
+fun UserDto.toDomain() = User(id, username, nickname, email)
+
+fun BoardDto.toEntity() = BoardEntity(id, name, key, description, ownerId, myRole, createdAt, updatedAt, listCount, taskCount, doneCount)
+fun BoardEntity.toDomain() = Board(
+    id, name, key, description, ownerId, BoardRole.parseOrNull(myRole) ?: BoardRole.VIEWER,
+    createdAt, updatedAt, listCount, taskCount, doneCount
 )
 
-fun ListDto.toEntity(): ListEntity = ListEntity(
-    id = id,
-    boardId = boardId,
-    title = title,
-    position = position,
-    updatedAt = updatedAt
+fun ListDto.toEntity() = ListEntity(id, boardId, title, position, category, wipLimit, updatedAt)
+fun ListEntity.toDomain() = BoardList(id, boardId, title, position, ColumnCategory.parse(category), wipLimit, updatedAt)
+
+fun TaskDto.toEntity() = TaskEntity(
+    id, boardId, listId, key, number, title, description, position, priority, type, assigneeId, reporterId,
+    startDate, dueDate, labels.joinToString(","), createdAt, updatedAt
 )
 
-/* ------------------ Task ------------------ */
-fun TaskDto.toDomain(): Task = Task(
-    id = id,
-    boardId = boardId,
-    listId = listId,
-    title = title,
-    description = description,
-    position = position,
-    status = status,
-    updatedAt = updatedAt,
-    isDeleted = isDeleted
+fun TaskEntity.toDomain() = Task(
+    id, boardId, listId, key, number, title, description, position, TaskPriority.parse(priority), TaskType.parse(type),
+    assigneeId, reporterId, startDate, dueDate, labels.split(',').filter { it.isNotBlank() }, createdAt, updatedAt
 )
 
-fun Task.toDto(): TaskDto = TaskDto(
-    id = id,
-    boardId = boardId,
-    listId = listId,
-    title = title,
-    description = description,
-    position = position,
-    status = status,
-    updatedAt = updatedAt,
-    isDeleted = isDeleted
+fun TaskEntity.toDto() = TaskDto(
+    id = id, boardId = boardId, listId = listId, key = key, number = number, title = title, description = description,
+    position = position, priority = priority, type = type, assigneeId = assigneeId, reporterId = reporterId,
+    startDate = startDate, dueDate = dueDate, labels = labels.split(',').filter { it.isNotBlank() },
+    createdAt = createdAt, updatedAt = updatedAt
 )
 
-/* ------------------ Board ------------------ */
-fun BoardDto.toDomain(): Board = Board(
-    id = id,
-    title = name
+fun Task.toEntity() = TaskEntity(
+    id, boardId, listId, key, number, title, description, position, priority.name, type.name, assigneeId, reporterId,
+    startDate, dueDate, labels.joinToString(","), createdAt, updatedAt
 )
 
-fun Board.toDto(): BoardDto = BoardDto(
-    id = id,
-    name = title,
-    description = null, // domain doesn’t have description
-    createdAt = System.currentTimeMillis(),
-    updatedAt = System.currentTimeMillis()
-)
+fun CommentDto.toDomain() = Comment(id, taskId, authorId, authorName, body, createdAt)
 
-/* ------------------ BoardList ------------------ */
-fun ListDto.toDomain(): BoardList = BoardList(
-    id = id,
-    boardId = boardId,
-    title = title,
-    position = position,
-    updatedAt = updatedAt
-)
+fun ActivityDto.toDomain() = Activity(id, boardId, taskId, actorId, actorName, type, ActivityType.parseOrNull(type), details, createdAt)
 
-fun BoardList.toDto(): ListDto = ListDto(
-    id = id,
-    boardId = boardId,
-    title = title,
-    position = position,
-    createdAt = System.currentTimeMillis(), // domain has no createdAt
-    updatedAt = updatedAt
-)
+fun TeamDto.toDomain() = Team(id, name, description, ownerId, TeamRole.parseOrNull(myRole) ?: TeamRole.MEMBER, memberCount)
 
-/* ------------------ User ------------------ */
-fun UserDto.toDomain(): User = User(
-    id = id,
-    username = username,
-    email = email
-)
+fun MemberDto.toDomain() = Member(userId, username, nickname, role, source)
 
-fun User.toDto(): UserDto = UserDto(
-    id = id,
-    username = username,
-    email = email
-)
-
-
-fun BoardDto.toEntity(): BoardEntity = BoardEntity(
-    id = id,
-    title = name,
-    updatedAt = updatedAt
-)
-
-// Entity -> DTO
-fun TaskEntity.toDto(): TaskDto = TaskDto(
-    id = id,
-    boardId = boardId,
-    listId = listId,
-    title = title,
-    description = description,
-    position = position,
-    status = status,
-    updatedAt = updatedAt,
-    isDeleted = isDeleted
-)
-
-fun ListEntity.toDto(): ListDto = ListDto(
-    id = id,
-    boardId = boardId,
-    title = title,
-    position = position,
-    createdAt = System.currentTimeMillis(),
-    updatedAt = updatedAt
-)
-
-fun BoardEntity.toDto(): BoardDto = BoardDto(
-    id = id,
-    name = title,
-    description = null,
-    createdAt = System.currentTimeMillis(),
-    updatedAt = updatedAt
-)
-
-// Entity -> Domain
-fun TaskEntity.toDomain(): Task = Task(
-    id = id,
-    boardId = boardId,
-    listId = listId,
-    title = title,
-    description = description,
-    position = position,
-    status = status,
-    updatedAt = updatedAt,
-    isDeleted = isDeleted
-)
-
-fun Task.toEntity(): TaskEntity = TaskEntity(
-    id = id,
-    boardId = boardId,
-    listId = listId,
-    title = title,
-    description = description,
-    position = position,
-    status = status,
-    updatedAt = updatedAt,
-    isDeleted = isDeleted
-)
-
-// BoardList
-fun BoardList.toEntity(): ListEntity = ListEntity(
-    id = id,
-    boardId = boardId,
-    title = title,
-    position = position,
-    updatedAt = updatedAt
-)
-
-fun ListEntity.toDomain(): BoardList = BoardList(
-    id = id,
-    boardId = boardId,
-    title = title,
-    position = position,
-    updatedAt = updatedAt
-)
-
-fun BoardEntity.toDomain(): Board = Board(
-    id = id,
-    title = title,
-    updatedAt = updatedAt
-)
-
-fun Board.toEntity(): BoardEntity = BoardEntity(
-    id = id,
-    title = title,
-    updatedAt = updatedAt
-)
+fun BoardTeamDto.toDomain() = BoardTeam(teamId, teamName, BoardRole.parseOrNull(role) ?: BoardRole.MEMBER, memberCount)

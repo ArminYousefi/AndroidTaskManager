@@ -1,0 +1,125 @@
+package domain
+
+/** One requirement of the password policy. [label] is shown to the user in the live checklist. */
+enum class PasswordRule(val label: String) {
+    MIN_LENGTH("At least 8 characters"),
+    MAX_LENGTH("At most 72 bytes (about 72 Latin characters)"),
+    UPPERCASE("One uppercase letter (A-Z)"),
+    LOWERCASE("One lowercase letter (a-z)"),
+    DIGIT("One number (0-9)"),
+    SPECIAL("One special character (e.g. ! @ # $ %)"),
+    NO_SPACES("No spaces"),
+    NOT_USERNAME("Does not contain your username"),
+    DIFFERENT_FROM_CURRENT("Different from your current password")
+}
+
+/** The outcome of checking one [PasswordRule]. */
+data class RuleResult(val rule: PasswordRule, val satisfied: Boolean)
+
+/** Coarse password strength used for the strength meter in the UI. */
+enum class PasswordStrength { NONE, WEAK, FAIR, GOOD, STRONG }
+
+/**
+ * Single source of truth for password rules.
+ *
+ * The *same file* is used by the server (authoritative validation) and by the Android app
+ * (live ✓/✗ checklist) - see `tools/sync_shared_rules.sh`. Keeping one implementation guarantees
+ * that the checklist the user sees is exactly what the server will enforce.
+ */
+object PasswordPolicy {
+    /** Minimum number of characters. */
+    const val MIN_LENGTH = 8
+
+    /** Maximum number of UTF-8 bytes (bcrypt ignores everything after byte 72). */
+    const val MAX_BYTES = 72
+
+    /**
+     * Evaluates [password] against every rule, in display order.
+     *
+     * @param password the candidate password.
+     * @param username when given, the password may not contain it (case-insensitive, usernames of 3+ chars).
+     * @param currentPassword when non-null (change-password flow) adds the "different from current" rule.
+     * @return one [RuleResult] per applicable rule, always in the same order.
+     */
+    fun evaluate(password: String, username: String? = null, currentPassword: String? = null): List<RuleResult> {
+        val results = mutableListOf(
+            RuleResult(PasswordRule.MIN_LENGTH, password.length >= MIN_LENGTH),
+            RuleResult(PasswordRule.MAX_LENGTH, password.toByteArray(Charsets.UTF_8).size <= MAX_BYTES),
+            RuleResult(PasswordRule.UPPERCASE, password.any { it.isUpperCase() }),
+            RuleResult(PasswordRule.LOWERCASE, password.any { it.isLowerCase() }),
+            RuleResult(PasswordRule.DIGIT, password.any { it.isDigit() }),
+            RuleResult(PasswordRule.SPECIAL, password.any { !it.isLetterOrDigit() && !it.isWhitespace() }),
+            RuleResult(PasswordRule.NO_SPACES, password.none { it.isWhitespace() })
+        )
+        if (!username.isNullOrBlank()) {
+            val u = username.trim()
+            val violates = u.length >= 3 && password.contains(u, ignoreCase = true)
+            results += RuleResult(PasswordRule.NOT_USERNAME, !violates)
+        }
+        if (currentPassword != null) {
+            results += RuleResult(PasswordRule.DIFFERENT_FROM_CURRENT, password.isNotEmpty() && password != currentPassword)
+        }
+        return results
+    }
+
+    /** @return true when every rule in [results] is satisfied. */
+    fun isValid(results: List<RuleResult>): Boolean = results.all { it.satisfied }
+
+    /** @return the rules that are *not* satisfied, in display order. */
+    fun violations(results: List<RuleResult>): List<PasswordRule> = results.filterNot { it.satisfied }.map { it.rule }
+
+    /**
+     * Maps [results] (plus the length of [password]) to a [PasswordStrength].
+     * [PasswordStrength.NONE] for an empty password; [PasswordStrength.STRONG] needs all rules and 12+ characters.
+     */
+    fun strength(password: String, results: List<RuleResult>): PasswordStrength {
+        if (password.isEmpty()) return PasswordStrength.NONE
+        val missing = results.count { !it.satisfied }
+        return when {
+            missing == 0 && password.length >= 12 -> PasswordStrength.STRONG
+            missing == 0 -> PasswordStrength.GOOD
+            missing <= 2 -> PasswordStrength.FAIR
+            else -> PasswordStrength.WEAK
+        }
+    }
+}
+
+/** Why a nickname was rejected. [message] is safe to show to the user. */
+enum class NicknameError(val message: String) {
+    TOO_SHORT("Nickname must be at least 2 characters"),
+    TOO_LONG("Nickname must be at most 30 characters"),
+    INVALID_CHARS("Use letters, numbers, spaces and . _ - ' only")
+}
+
+/**
+ * Rules for the *nickname* - the editable display name. The *username* is the immutable login id
+ * and is validated by [UsernamePolicy].
+ */
+object NicknamePolicy {
+    private val ALLOWED = Regex("^[\\p{L}\\p{N} ._'-]+$")
+
+    /** Collapses runs of whitespace and trims, so "  Ali   Rezaei " becomes "Ali Rezaei". */
+    fun normalize(raw: String): String = raw.trim().replace(Regex("\\s+"), " ")
+
+    /**
+     * @param raw the nickname as typed (it is normalised first).
+     * @return null when valid, otherwise the first [NicknameError] found.
+     */
+    fun validate(raw: String): NicknameError? {
+        val n = normalize(raw)
+        return when {
+            n.length < 2 -> NicknameError.TOO_SHORT
+            n.length > 30 -> NicknameError.TOO_LONG
+            !ALLOWED.matches(n) -> NicknameError.INVALID_CHARS
+            else -> null
+        }
+    }
+}
+
+/** Rules for the immutable login username. */
+object UsernamePolicy {
+    private val ALLOWED = Regex("^[A-Za-z0-9_.-]{3,30}$")
+
+    /** @return true when [raw] is a legal username (3-30 chars of letters, digits, `_`, `.`, `-`). */
+    fun isValid(raw: String): Boolean = ALLOWED.matches(raw)
+}
